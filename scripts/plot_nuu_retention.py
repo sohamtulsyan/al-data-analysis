@@ -39,11 +39,6 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-
 from retention_pipeline.bucketing import build_buckets  # noqa: E402
 from retention_pipeline.cleaning.pipeline import (  # noqa: E402
     ActivityMatrix,
@@ -198,6 +193,11 @@ def _plot_retention(
     output_path: Path,
 ) -> Path:
     """Same style as retention_pipeline/visualize.py retention PNGs."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
     buckets = ret.get("buckets") or []
     if not buckets:
         return output_path

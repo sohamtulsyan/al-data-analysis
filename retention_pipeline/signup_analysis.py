@@ -9,11 +9,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-
 from retention_pipeline.cleaning.pipeline import prepare_analysis
 from retention_pipeline.config import DAILY_PLAY_DATA_DIR, OUTPUT_DIR
 from retention_pipeline.metrics.errors import GrainNotAllowedError
@@ -29,6 +24,7 @@ def run_signup_fraction(
     timezone: str = "UTC",
     data_dir: Path = DAILY_PLAY_DATA_DIR,
     output_dir: Path = OUTPUT_DIR,
+    generate_chart: bool = True,
 ) -> Dict[str, Any]:
     """Build Activity Matrix → signup fraction by ISO week → JSON + PNG."""
     tz = ZoneInfo(timezone)
@@ -63,9 +59,12 @@ def run_signup_fraction(
     json_path.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
     logger.info("Wrote signup fraction results to %s", json_path)
 
-    chart_path = _render_chart(metric, charts_dir / "signup_fraction.png")
-    result["chartPath"] = str(chart_path)
     result["resultsPath"] = str(json_path)
+    if generate_chart:
+        chart_path = _render_chart(metric, charts_dir / "signup_fraction.png")
+        result["chartPath"] = str(chart_path)
+    else:
+        result["chartPath"] = ""
     return result
 
 
@@ -88,6 +87,11 @@ def _bucket_label(b: Dict[str, Any]) -> str:
 
 def _render_chart(metric: Dict[str, Any], output_path: Path) -> Path:
     """Line chart styled like retention_pipeline/visualize.py."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
     buckets = metric.get("buckets") or []
     labels = [_bucket_label(b) for b in buckets]
     values = [_num(b["signupFractionPercent"]) for b in buckets]

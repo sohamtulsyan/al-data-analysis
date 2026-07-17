@@ -27,11 +27,6 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-
 from retention_pipeline.config import OUTPUT_DIR, PROJECT_ROOT  # noqa: E402
 from retention_pipeline.users_csv import (  # noqa: E402
     count_by_week,
@@ -85,6 +80,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--output-dir",
         default=str(OUTPUT_DIR),
+    )
+    parser.add_argument(
+        "--skip-chart",
+        action="store_true",
+        help="Write CSV only (no matplotlib PNG)",
     )
     args = parser.parse_args(argv)
 
@@ -143,38 +143,46 @@ def main(argv: Optional[List[str]] = None) -> int:
         writer.writeheader()
         writer.writerows(rows)
 
-    # Plot (style matches retention / registration charts).
-    labels = [r["week"] for r in rows]
-    values = [
-        None if r["signupFractionPercent"] == "N/A" else float(r["signupFractionPercent"])
-        for r in rows
-    ]
-    plot_x = [lab for lab, v in zip(labels, values) if v is not None]
-    plot_y = [v for v in values if v is not None]
-
-    charts_dir.mkdir(parents=True, exist_ok=True)
-    png_path = charts_dir / "nuu_signup_fraction.png"
-    fig, ax = plt.subplots(figsize=(10, 4))
-    if plot_y:
-        ax.plot(plot_x, plot_y, marker="o", color="#1f4e79")
-    ax.set_title(
-        "Signup fraction vs NUU — signups / new unique users (%) · "
-        f"{window_start.isoformat()} → {window_end.isoformat()}"
-    )
-    ax.set_xlabel("Bucket")
-    ax.set_ylabel("Signup fraction (%)")
-    ax.tick_params(axis="x", rotation=45)
-    if len(plot_x) > 24:
-        step = max(1, len(plot_x) // 16)
-        ax.set_xticks(range(0, len(plot_x), step))
-        ax.set_xticklabels(plot_x[::step], rotation=45, ha="right")
-    fig.tight_layout()
-    fig.savefig(png_path, dpi=140)
-    plt.close(fig)
-
     print(f"Weeks: {len(rows)}")
     print(f"CSV:   {csv_path}")
-    print(f"Chart: {png_path}")
+
+    if not args.skip_chart:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        labels = [r["week"] for r in rows]
+        values = [
+            None
+            if r["signupFractionPercent"] == "N/A"
+            else float(r["signupFractionPercent"])
+            for r in rows
+        ]
+        plot_x = [lab for lab, v in zip(labels, values) if v is not None]
+        plot_y = [v for v in values if v is not None]
+
+        charts_dir.mkdir(parents=True, exist_ok=True)
+        png_path = charts_dir / "nuu_signup_fraction.png"
+        fig, ax = plt.subplots(figsize=(10, 4))
+        if plot_y:
+            ax.plot(plot_x, plot_y, marker="o", color="#1f4e79")
+        ax.set_title(
+            "Signup fraction vs NUU — signups / new unique users (%) · "
+            f"{window_start.isoformat()} → {window_end.isoformat()}"
+        )
+        ax.set_xlabel("Bucket")
+        ax.set_ylabel("Signup fraction (%)")
+        ax.tick_params(axis="x", rotation=45)
+        if len(plot_x) > 24:
+            step = max(1, len(plot_x) // 16)
+            ax.set_xticks(range(0, len(plot_x), step))
+            ax.set_xticklabels(plot_x[::step], rotation=45, ha="right")
+        fig.tight_layout()
+        fig.savefig(png_path, dpi=140)
+        plt.close(fig)
+        print(f"Chart: {png_path}")
+
     for r in rows[:3]:
         print(
             f"  {r['week']}: signups={r['signups']} nuu={r['nuu_count']} "

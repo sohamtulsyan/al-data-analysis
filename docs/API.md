@@ -37,6 +37,9 @@ Open http://localhost:8000/docs
 | `CORS_ORIGINS` | (empty) | Comma-separated origins for React |
 | `JOB_MAX_WORKERS` | `2` | Background job thread pool size |
 | `USERS_CSV_PATH` | `users_*.csv` in project root | Default users export |
+| `RETENTION_API_GENERATE_CHARTS` | `0` | Set `1` to generate matplotlib PNGs on the server (not needed for Recharts dashboard). **Keep `0` on Python 3.14** — matplotlib PNG rendering can hit a `RecursionError` in `Path.__deepcopy__`. |
+
+Use **`runtime.txt`** (`python-3.11.9`) or Render `PYTHON_VERSION=3.11.9` instead of 3.14 for full PNG support.
 
 ## Configuration API
 

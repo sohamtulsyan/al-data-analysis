@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List
@@ -24,6 +25,15 @@ from retention_api.services.config_merge import (
     resolve_window_params,
 )
 from retention_api.services.paths import data_dir, output_dir
+
+
+def api_should_generate_charts() -> bool:
+    """PNG generation uses matplotlib; disabled by default on API (use JSON + Recharts)."""
+    return os.environ.get("RETENTION_API_GENERATE_CHARTS", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def _artifacts(
@@ -104,13 +114,17 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
         except GrainNotAllowedError as exc:
             raise ValueError(json.dumps(exc.to_dict())) from exc
         results_path = odir / "analysis_results.json"
-        chart_paths = load_and_render(results_path, odir)
+        chart_paths: Dict[str, Path] = {}
+        charts_list: List[str] = []
+        if api_should_generate_charts():
+            chart_paths = load_and_render(results_path, odir)
+            charts_list = [str(v) for v in chart_paths.values()]
         return _artifacts(
             {
                 "analysisResults": str(results_path),
                 **{k: str(v) for k, v in chart_paths.items()},
             },
-            charts=[str(v) for v in chart_paths.values()],
+            charts=charts_list,
         )
 
     if job_type == JobType.signup_fraction:
@@ -126,6 +140,7 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
                 timezone=tz_name,
                 data_dir=ddir,
                 output_dir=odir,
+                generate_chart=api_should_generate_charts(),
             )
         except GrainNotAllowedError as exc:
             raise ValueError(json.dumps(exc.to_dict())) from exc
@@ -186,6 +201,8 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
             "--output-dir",
             str(odir),
         ]
+        if not api_should_generate_charts():
+            argv.append("--skip-chart")
         rc = mod.main(argv)
         if rc != 0:
             raise RuntimeError(f"plot_nuu_signup_fraction.py exited with code {rc}")
@@ -284,27 +301,32 @@ def _run_nuu_retention(
     odir.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
-    chart_paths = {
-        "strict": mod._plot_retention(
-            strict,
-            "NUU Strict Retention (%)",
-            charts_dir / "nuu_strictRetention.png",
-        ),
-        "cumulative": mod._plot_retention(
-            cumulative,
-            "NUU Cumulative Retention (%)",
-            charts_dir / "nuu_cumulativeRetention.png",
-        ),
-        "consecutive": mod._plot_retention(
-            consecutive,
-            "NUU Consecutive Retention (%)",
-            charts_dir / "nuu_consecutiveRetention.png",
-        ),
-    }
+    chart_paths: Dict[str, Path] = {}
+    charts_list: List[str] = []
+    if api_should_generate_charts():
+        chart_paths = {
+            "strict": mod._plot_retention(
+                strict,
+                "NUU Strict Retention (%)",
+                charts_dir / "nuu_strictRetention.png",
+            ),
+            "cumulative": mod._plot_retention(
+                cumulative,
+                "NUU Cumulative Retention (%)",
+                charts_dir / "nuu_cumulativeRetention.png",
+            ),
+            "consecutive": mod._plot_retention(
+                consecutive,
+                "NUU Consecutive Retention (%)",
+                charts_dir / "nuu_consecutiveRetention.png",
+            ),
+        }
+        charts_list = [str(v) for v in chart_paths.values()]
+
     return _artifacts(
         {
             "nuuRetentionJson": str(json_path),
             **{k: str(v) for k, v in chart_paths.items()},
         },
-        charts=[str(v) for v in chart_paths.values()],
+        charts=charts_list,
     )

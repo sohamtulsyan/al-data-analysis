@@ -18,6 +18,8 @@ services:
         sync: false
       - key: CLIENT_SECRET
         sync: false
+      - key: RETENTION_API_GENERATE_CHARTS
+        value: "0"
     disk:
       name: retention-data
       mountPath: /var/data
