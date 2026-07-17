@@ -70,6 +70,7 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
         )
 
     if job_type == JobType.analyze:
+        _require_play_data_csvs(ddir)
         start, end, grain, tz_name, strict_h, window_h = resolve_analysis_params(params)
         try:
             result = run_analysis(
@@ -99,6 +100,7 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
                 raise ValueError("CLIENT_ID and CLIENT_SECRET must be set in environment.")
             config = load_fetch_config()
             run_historical_backfill(config, directory=ddir)
+        _require_play_data_csvs(ddir)
         start, end, grain, tz_name, strict_h, window_h = resolve_analysis_params(params)
         try:
             run_analysis(
@@ -128,6 +130,7 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
         )
 
     if job_type == JobType.signup_fraction:
+        _require_play_data_csvs(ddir)
         start, end, _grain, tz_name, _, _ = resolve_analysis_params(params)
         users_csv = resolve_users_csv(params)
         if not users_csv.is_file():
@@ -153,6 +156,7 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
         )
 
     if job_type == JobType.nuu_counts:
+        _require_play_data_csvs(ddir)
         mod = load_script_module("compute_nuu.py")
         ws = params.get("windowStart")
         we = params.get("windowEnd")
@@ -173,7 +177,9 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
             argv.extend(["--timezone", tz_name])
         rc = mod.main(argv)
         if rc != 0:
-            raise RuntimeError(f"compute_nuu.py exited with code {rc}")
+            raise RuntimeError(
+                f"compute_nuu.py exited with code {rc} (data dir: {ddir})"
+            )
         return _artifacts(
             {
                 "nuuDaily": str(odir / "nuu_daily.csv"),
@@ -224,6 +230,20 @@ def _credentials_ok() -> bool:
     return client_credentials_configured()
 
 
+def _require_play_data_csvs(ddir: Path) -> None:
+    """Fail fast with a actionable message when Daily Play Data is empty."""
+    days = discover_csv_days(ddir)
+    if days:
+        return
+    raise FileNotFoundError(
+        f"No Daily Play Data CSVs in {ddir}. "
+        "On Render, set DATA_DIR to your persistent disk (e.g. "
+        "'/var/data/Daily Play Data') and run a backfill or daily fetch job "
+        "before analyze / NUU jobs. Locally, use cli.py backfill or --skip-fetch "
+        "with CSVs under 'Daily Play Data/'."
+    )
+
+
 def _run_nuu_retention(
     ddir: Path,
     odir: Path,
@@ -237,7 +257,7 @@ def _run_nuu_retention(
 
     available = discover_csv_days(ddir)
     if not available:
-        raise FileNotFoundError(f"No Daily Play Data CSVs in {ddir}")
+        _require_play_data_csvs(ddir)  # raises with same message as other jobs
 
     timeframe_start = available[0]
     timeframe_end = max(available[-1], window_end)
