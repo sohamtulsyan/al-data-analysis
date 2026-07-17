@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: retention-pipeline-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn retention_api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: DATA_DIR
+        value: /var/data/Daily Play Data
+      - key: OUTPUT_DIR
+        value: /var/data/output
+      - key: RUNTIME_CONFIG_PATH
+        value: /var/data/runtime_config.json
+      - key: CLIENT_ID
+        sync: false
+      - key: CLIENT_SECRET
+        sync: false
+    disk:
+      name: retention-data
+      mountPath: /var/data
+      sizeGB: 10
+
+  - type: cron
+    name: retention-daily-fetch
+    runtime: python
+    schedule: "0 6 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      curl -sf -X POST "${RETENTION_API_URL}/api/v1/jobs"
+      -H "Content-Type: application/json"
+      -d '{"type":"daily","params":{}}'
+    envVars:
+      - key: RETENTION_API_URL
+        sync: false

@@ -1,0 +1,11 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+output/
+data/runtime_config.json
+Daily Play Data/*.csv
+Daily Play Data/*.partial
+.DS_Store
+*.egg-info/
