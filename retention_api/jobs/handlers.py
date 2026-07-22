@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
@@ -22,7 +21,6 @@ from retention_api.services.config_merge import (
     load_fetch_config,
     resolve_analysis_params,
     resolve_users_csv,
-    resolve_window_params,
 )
 from retention_api.services.paths import data_dir, output_dir
 
@@ -70,28 +68,7 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
         )
 
     if job_type == JobType.analyze:
-        _require_play_data_csvs(ddir)
-        start, end, grain, tz_name, strict_h, window_h = resolve_analysis_params(params)
-        try:
-            result = run_analysis(
-                timeline_start=start.date(),
-                timeline_end=end.date(),
-                grain=grain,
-                timezone=tz_name,
-                data_dir=ddir,
-                output_dir=odir,
-                strict_horizons=strict_h,
-                window_horizons=window_h,
-            )
-        except GrainNotAllowedError as exc:
-            raise ValueError(json.dumps(exc.to_dict())) from exc
-        results_path = odir / "analysis_results.json"
-        return _artifacts(
-            {
-                "analysisResults": str(results_path),
-                "distinctUsers": str(result.get("distinctUsersInMatrix", "")),
-            }
-        )
+        return _run_analysis(ddir, odir, params)
 
     if job_type == JobType.pipeline:
         skip_fetch = bool(params.get("skipFetch", False))
@@ -100,126 +77,37 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
                 raise ValueError("CLIENT_ID and CLIENT_SECRET must be set in environment.")
             config = load_fetch_config()
             run_historical_backfill(config, directory=ddir)
-        _require_play_data_csvs(ddir)
-        start, end, grain, tz_name, strict_h, window_h = resolve_analysis_params(params)
-        try:
-            run_analysis(
-                timeline_start=start.date(),
-                timeline_end=end.date(),
-                grain=grain,
-                timezone=tz_name,
-                data_dir=ddir,
-                output_dir=odir,
-                strict_horizons=strict_h,
-                window_horizons=window_h,
-            )
-        except GrainNotAllowedError as exc:
-            raise ValueError(json.dumps(exc.to_dict())) from exc
-        results_path = odir / "analysis_results.json"
-        chart_paths: Dict[str, Path] = {}
-        charts_list: List[str] = []
-        if api_should_generate_charts():
-            chart_paths = load_and_render(results_path, odir)
-            charts_list = [str(v) for v in chart_paths.values()]
-        return _artifacts(
-            {
-                "analysisResults": str(results_path),
-                **{k: str(v) for k, v in chart_paths.items()},
-            },
-            charts=charts_list,
-        )
+
+        analysis = _run_analysis(ddir, odir, params)
+        derived_paths: Dict[str, str] = dict(analysis.get("paths", {}))
+        derived_charts: List[str] = list(analysis.get("charts", []))
+
+        for derived in (
+            _run_nuu_retention(ddir, odir, params),
+            _run_ouu_retention(ddir, odir, params),
+            _run_signup_fraction(ddir, odir, params),
+            _run_nuu_counts(ddir, odir, params),
+            _run_nuu_signup_fraction(odir, params),
+        ):
+            derived_paths.update(derived.get("paths", {}))
+            derived_charts.extend(derived.get("charts", []))
+
+        return _artifacts(derived_paths, charts=derived_charts)
 
     if job_type == JobType.signup_fraction:
-        _require_play_data_csvs(ddir)
-        start, end, _grain, tz_name, _, _ = resolve_analysis_params(params)
-        users_csv = resolve_users_csv(params)
-        if not users_csv.is_file():
-            raise FileNotFoundError(f"Users CSV not found: {users_csv}")
-        try:
-            result = run_signup_fraction(
-                users_csv=users_csv,
-                timeline_start=start.date(),
-                timeline_end=end.date(),
-                timezone=tz_name,
-                data_dir=ddir,
-                output_dir=odir,
-                generate_chart=api_should_generate_charts(),
-            )
-        except GrainNotAllowedError as exc:
-            raise ValueError(json.dumps(exc.to_dict())) from exc
-        return _artifacts(
-            {
-                "resultsPath": result.get("resultsPath", ""),
-                "chartPath": result.get("chartPath", ""),
-            },
-            charts=[result.get("chartPath", "")] if result.get("chartPath") else [],
-        )
+        return _run_signup_fraction(ddir, odir, params)
 
     if job_type == JobType.nuu_counts:
-        _require_play_data_csvs(ddir)
-        mod = load_script_module("compute_nuu.py")
-        ws = params.get("windowStart")
-        we = params.get("windowEnd")
-        tz_name = params.get("timezone")
-        if not ws or not we:
-            ws, we, tz_name, _grain, _, _ = resolve_window_params(params)
-        argv = [
-            "--data-dir",
-            str(ddir),
-            "--output-dir",
-            str(odir),
-            "--window-start",
-            ws,
-            "--window-end",
-            we,
-        ]
-        if tz_name:
-            argv.extend(["--timezone", tz_name])
-        rc = mod.main(argv)
-        if rc != 0:
-            raise RuntimeError(
-                f"compute_nuu.py exited with code {rc} (data dir: {ddir})"
-            )
-        return _artifacts(
-            {
-                "nuuDaily": str(odir / "nuu_daily.csv"),
-                "nuuWeekly": str(odir / "nuu_weekly.csv"),
-                "nuuMonthly": str(odir / "nuu_monthly.csv"),
-            }
-        )
+        return _run_nuu_counts(ddir, odir, params)
 
     if job_type == JobType.nuu_retention:
         return _run_nuu_retention(ddir, odir, params)
 
+    if job_type == JobType.ouu_retention:
+        return _run_ouu_retention(ddir, odir, params)
+
     if job_type == JobType.nuu_signup_fraction:
-        mod = load_script_module("plot_nuu_signup_fraction.py")
-        users_csv = resolve_users_csv(params)
-        ws, we, tz_name, _grain, _, _ = resolve_window_params(params)
-        argv = [
-            "--users-csv",
-            str(users_csv),
-            "--nuu-weekly",
-            str(odir / "nuu_weekly.csv"),
-            "--window-start",
-            ws,
-            "--window-end",
-            we,
-            "--output-dir",
-            str(odir),
-        ]
-        if not api_should_generate_charts():
-            argv.append("--skip-chart")
-        rc = mod.main(argv)
-        if rc != 0:
-            raise RuntimeError(f"plot_nuu_signup_fraction.py exited with code {rc}")
-        chart = odir / "charts" / "nuu_signup_fraction.png"
-        return _artifacts(
-            {
-                "csv": str(odir / "nuu_signup_fraction.csv"),
-                "chart": str(chart),
-            },
-            charts=[str(chart)] if chart.is_file() else [],
-        )
+        return _run_nuu_signup_fraction(odir, params)
 
     raise ValueError(f"Unknown job type: {job_type}")
 
@@ -238,9 +126,142 @@ def _require_play_data_csvs(ddir: Path) -> None:
     raise FileNotFoundError(
         f"No Daily Play Data CSVs in {ddir}. "
         "On Render, set DATA_DIR to your persistent disk (e.g. "
-        "'/var/data/Daily Play Data') and run a backfill or daily fetch job "
-        "before analyze / NUU jobs. Locally, use cli.py backfill or --skip-fetch "
+        "'/var/data/Daily Play Data') and run the pipeline (or fetch data first) "
+        "before analysis. Locally, use cli.py backfill or --skip-fetch "
         "with CSVs under 'Daily Play Data/'."
+    )
+
+
+def _run_analysis(
+    ddir: Path,
+    odir: Path,
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    _require_play_data_csvs(ddir)
+    start, end, grain, tz_name, strict_h, window_h = resolve_analysis_params(params)
+    try:
+        result = run_analysis(
+            timeline_start=start.date(),
+            timeline_end=end.date(),
+            grain=grain,
+            timezone=tz_name,
+            data_dir=ddir,
+            output_dir=odir,
+            strict_horizons=strict_h,
+            window_horizons=window_h,
+        )
+    except GrainNotAllowedError as exc:
+        raise ValueError(json.dumps(exc.to_dict())) from exc
+    results_path = odir / "analysis_results.json"
+    chart_paths: Dict[str, Path] = {}
+    charts_list: List[str] = []
+    if api_should_generate_charts():
+        chart_paths = load_and_render(results_path, odir)
+        charts_list = [str(v) for v in chart_paths.values()]
+    return _artifacts(
+        {
+            "analysisResults": str(results_path),
+            "distinctUsers": str(result.get("distinctUsersInMatrix", "")),
+            **{k: str(v) for k, v in chart_paths.items()},
+        },
+        charts=charts_list,
+    )
+
+
+def _run_signup_fraction(
+    ddir: Path,
+    odir: Path,
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    _require_play_data_csvs(ddir)
+    start, end, _grain, tz_name, _, _ = resolve_analysis_params(params)
+    users_csv = resolve_users_csv(params)
+    if not users_csv.is_file():
+        raise FileNotFoundError(f"Users CSV not found: {users_csv}")
+    try:
+        result = run_signup_fraction(
+            users_csv=users_csv,
+            timeline_start=start.date(),
+            timeline_end=end.date(),
+            timezone=tz_name,
+            data_dir=ddir,
+            output_dir=odir,
+            generate_chart=api_should_generate_charts(),
+        )
+    except GrainNotAllowedError as exc:
+        raise ValueError(json.dumps(exc.to_dict())) from exc
+    return _artifacts(
+        {
+            "resultsPath": result.get("resultsPath", ""),
+            "chartPath": result.get("chartPath", ""),
+        },
+        charts=[result.get("chartPath", "")] if result.get("chartPath") else [],
+    )
+
+
+def _run_nuu_counts(
+    ddir: Path,
+    odir: Path,
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    _require_play_data_csvs(ddir)
+    mod = load_script_module("compute_nuu.py")
+    start, end, _grain, tz_name, _, _ = resolve_analysis_params(params)
+    argv = [
+        "--data-dir",
+        str(ddir),
+        "--output-dir",
+        str(odir),
+        "--window-start",
+        start.date().isoformat(),
+        "--window-end",
+        end.date().isoformat(),
+    ]
+    if tz_name:
+        argv.extend(["--timezone", tz_name])
+    rc = mod.main(argv)
+    if rc != 0:
+        raise RuntimeError(f"compute_nuu.py exited with code {rc} (data dir: {ddir})")
+    return _artifacts(
+        {
+            "nuuDaily": str(odir / "nuu_daily.csv"),
+            "nuuWeekly": str(odir / "nuu_weekly.csv"),
+            "nuuMonthly": str(odir / "nuu_monthly.csv"),
+        }
+    )
+
+
+def _run_nuu_signup_fraction(
+    odir: Path,
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    mod = load_script_module("plot_nuu_signup_fraction.py")
+    users_csv = resolve_users_csv(params)
+    start, end, _grain, _tz_name, _, _ = resolve_analysis_params(params)
+    argv = [
+        "--users-csv",
+        str(users_csv),
+        "--nuu-weekly",
+        str(odir / "nuu_weekly.csv"),
+        "--window-start",
+        start.date().isoformat(),
+        "--window-end",
+        end.date().isoformat(),
+        "--output-dir",
+        str(odir),
+    ]
+    if not api_should_generate_charts():
+        argv.append("--skip-chart")
+    rc = mod.main(argv)
+    if rc != 0:
+        raise RuntimeError(f"plot_nuu_signup_fraction.py exited with code {rc}")
+    chart = odir / "charts" / "nuu_signup_fraction.png"
+    return _artifacts(
+        {
+            "csv": str(odir / "nuu_signup_fraction.csv"),
+            "chart": str(chart),
+        },
+        charts=[str(chart)] if chart.is_file() else [],
     )
 
 
@@ -251,34 +272,34 @@ def _run_nuu_retention(
 ) -> Dict[str, Any]:
     """Mirror scripts/plot_nuu_retention.main() with configurable horizons."""
     mod = load_script_module("plot_nuu_retention.py")
-    ws, we, tz_name, grain, strict_h, window_h = resolve_window_params(params)
-    window_start = date.fromisoformat(ws)
-    window_end = date.fromisoformat(we)
+    start, end, grain, tz_name, strict_h, window_h = resolve_analysis_params(params)
+    timeline_start = start.date()
+    timeline_end = end.date()
 
     available = discover_csv_days(ddir)
     if not available:
         _require_play_data_csvs(ddir)  # raises with same message as other jobs
 
     timeframe_start = available[0]
-    timeframe_end = max(available[-1], window_end)
+    timeframe_end = max(available[-1], timeline_end)
     tz = ZoneInfo(tz_name)
 
     _plays, matrix, _dq = prepare_analysis(ddir, timeframe_start, timeframe_end, tz)
     try:
-        mod.validate_grain(window_start, window_end, grain)
+        mod.validate_grain(timeline_start, timeline_end, grain)
     except Exception as exc:
         to_dict = getattr(exc, "to_dict", None)
         if callable(to_dict):
             raise ValueError(json.dumps(to_dict())) from exc
         raise
 
-    nuu_d0 = mod._all_nuu_d0(matrix, window_start, window_end)
+    nuu_d0 = mod._all_nuu_d0(matrix, timeline_start, timeline_end)
     strict = mod._compute_family(
         name="nuuStrictRetention",
         matrix=matrix,
         nuu_d0=nuu_d0,
-        window_start=window_start,
-        window_end=window_end,
+        window_start=timeline_start,
+        window_end=timeline_end,
         grain=grain,
         horizons=strict_h,
         predicate=mod._strict,
@@ -287,8 +308,8 @@ def _run_nuu_retention(
         name="nuuCumulativeRetention",
         matrix=matrix,
         nuu_d0=nuu_d0,
-        window_start=window_start,
-        window_end=window_end,
+        window_start=timeline_start,
+        window_end=timeline_end,
         grain=grain,
         horizons=window_h,
         predicate=mod._cumulative,
@@ -297,16 +318,16 @@ def _run_nuu_retention(
         name="nuuConsecutiveRetention",
         matrix=matrix,
         nuu_d0=nuu_d0,
-        window_start=window_start,
-        window_end=window_end,
+        window_start=timeline_start,
+        window_end=timeline_end,
         grain=grain,
         horizons=window_h,
         predicate=mod._consecutive,
     )
 
     payload = {
-        "windowStart": window_start.isoformat(),
-        "windowEnd": window_end.isoformat(),
+        "timelineStart": timeline_start.isoformat(),
+        "timelineEnd": timeline_end.isoformat(),
         "grain": grain,
         "timezone": tz_name,
         "cohort": "newUniqueUsers",
@@ -346,6 +367,81 @@ def _run_nuu_retention(
     return _artifacts(
         {
             "nuuRetentionJson": str(json_path),
+            **{k: str(v) for k, v in chart_paths.items()},
+        },
+        charts=charts_list,
+    )
+
+
+def _run_ouu_retention(
+    ddir: Path,
+    odir: Path,
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Mirror scripts/plot_ouu_retention with configurable horizons."""
+    mod = load_script_module("plot_ouu_retention.py")
+    start, end, grain, tz_name, strict_h, window_h = resolve_analysis_params(params)
+    timeline_start = start.date()
+    timeline_end = end.date()
+
+    available = discover_csv_days(ddir)
+    if not available:
+        _require_play_data_csvs(ddir)
+
+    timeframe_start = available[0]
+    timeframe_end = max(available[-1], timeline_end)
+    tz = ZoneInfo(tz_name)
+
+    _plays, matrix, _dq = prepare_analysis(ddir, timeframe_start, timeframe_end, tz)
+    try:
+        mod.validate_grain(timeline_start, timeline_end, grain)
+    except Exception as exc:
+        to_dict = getattr(exc, "to_dict", None)
+        if callable(to_dict):
+            raise ValueError(json.dumps(to_dict())) from exc
+        raise
+
+    payload = mod.build_ouu_retention_payload(
+        matrix,
+        window_start=timeline_start,
+        window_end=timeline_end,
+        grain=grain,
+        timezone=tz_name,
+        strict_horizons=tuple(strict_h),
+        window_horizons=tuple(window_h),
+    )
+
+    charts_dir = odir / "charts"
+    json_path = odir / "ouu_retention.json"
+    odir.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+    chart_paths: Dict[str, Path] = {}
+    charts_list: List[str] = []
+    if api_should_generate_charts():
+        metrics = payload["metrics"]
+        chart_paths = {
+            "strict": mod._plot_retention(
+                metrics["strictRetention"],
+                "OUU Strict Retention (%)",
+                charts_dir / "ouu_strictRetention.png",
+            ),
+            "cumulative": mod._plot_retention(
+                metrics["cumulativeRetention"],
+                "OUU Cumulative Retention (%)",
+                charts_dir / "ouu_cumulativeRetention.png",
+            ),
+            "consecutive": mod._plot_retention(
+                metrics["consecutiveRetention"],
+                "OUU Consecutive Retention (%)",
+                charts_dir / "ouu_consecutiveRetention.png",
+            ),
+        }
+        charts_list = [str(v) for v in chart_paths.values()]
+
+    return _artifacts(
+        {
+            "ouuRetentionJson": str(json_path),
             **{k: str(v) for k, v in chart_paths.items()},
         },
         charts=charts_list,

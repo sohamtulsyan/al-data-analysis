@@ -15,6 +15,7 @@ class JobType(str, Enum):
     pipeline = "pipeline"
     nuu_counts = "nuu_counts"
     nuu_retention = "nuu_retention"
+    ouu_retention = "ouu_retention"
     signup_fraction = "signup_fraction"
     nuu_signup_fraction = "nuu_signup_fraction"
 

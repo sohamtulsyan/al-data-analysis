@@ -23,4 +23,6 @@ def patch_config(body: RuntimeConfigPatch) -> RuntimeConfigResponse:
         data = config_store.patch(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return config_store.to_response(data, client_credentials_configured=client_credentials_configured())

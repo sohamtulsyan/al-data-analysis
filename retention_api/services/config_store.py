@@ -9,6 +9,7 @@ from typing import Any, Dict
 from retention_api.schemas.config import RuntimeConfigPatch, RuntimeConfigResponse
 from retention_api.services.paths import (
     data_dir,
+    ensure_writable_parent,
     output_dir,
     runtime_config_path,
     users_csv_default_path,
@@ -33,8 +34,6 @@ def _defaults() -> Dict[str, Any]:
         "timelineStart": None,
         "timelineEnd": None,
         "grain": None,
-        "windowStart": None,
-        "windowEnd": None,
         "strictHorizons": list(DEFAULT_STRICT),
         "windowHorizons": list(DEFAULT_WINDOW),
         "usersCsvPath": None,
@@ -48,12 +47,21 @@ def load_raw() -> Dict[str, Any]:
         stored = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(stored, dict):
             data.update(stored)
+    # Legacy: NUU windowStart/windowEnd merged into analysis timeline.
+    if not data.get("timelineStart") and data.get("windowStart"):
+        data["timelineStart"] = data["windowStart"]
+    if not data.get("timelineEnd") and data.get("windowEnd"):
+        data["timelineEnd"] = data["windowEnd"]
+    data.pop("windowStart", None)
+    data.pop("windowEnd", None)
     return data
 
 
 def save_raw(data: Dict[str, Any]) -> None:
-    path = runtime_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = ensure_writable_parent(
+        runtime_config_path(),
+        label="RUNTIME_CONFIG_PATH",
+    )
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
@@ -72,8 +80,6 @@ def patch(updates: RuntimeConfigPatch) -> Dict[str, Any]:
         "timelineStart": "timelineStart",
         "timelineEnd": "timelineEnd",
         "grain": "grain",
-        "windowStart": "windowStart",
-        "windowEnd": "windowEnd",
         "strictHorizons": "strictHorizons",
         "windowHorizons": "windowHorizons",
         "usersCsvPath": "usersCsvPath",
@@ -100,8 +106,6 @@ def to_response(data: Dict[str, Any], *, client_credentials_configured: bool) ->
         timelineStart=data.get("timelineStart"),
         timelineEnd=data.get("timelineEnd"),
         grain=data.get("grain"),
-        windowStart=data.get("windowStart"),
-        windowEnd=data.get("windowEnd"),
         strictHorizons=list(data.get("strictHorizons") or DEFAULT_STRICT),
         windowHorizons=list(data.get("windowHorizons") or DEFAULT_WINDOW),
         usersCsvPath=users_path,

@@ -11,6 +11,7 @@ Per ISO week:
 
 Writes:
   output/nuu_signup_fraction.csv
+  output/nuu_signup_fraction.json
   output/charts/nuu_signup_fraction.png
 """
 
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -27,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from retention_pipeline.bucketing import build_buckets
 from retention_pipeline.config import OUTPUT_DIR, PROJECT_ROOT  # noqa: E402
 from retention_pipeline.users_csv import (  # noqa: E402
     count_by_week,
@@ -118,33 +121,62 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     signups_by_week = count_by_week(registration_dates)
 
-    # Align to NUU weeks (same window / grain as compute_nuu).
-    weeks = sorted(nuu_by_week.keys())
+    window_buckets = build_buckets(window_start, window_end, "Weekly")
+    bucket_by_key = {b.key: b for b in window_buckets}
+    weeks = sorted(w for w in nuu_by_week if w in bucket_by_key)
     rows: List[dict] = []
     for week in weeks:
         signups = int(signups_by_week.get(week, 0))
         nuu = nuu_by_week[week]
+        bucket = bucket_by_key[week]
         rows.append(
             {
                 "week": week,
                 "signups": signups,
                 "nuu_count": nuu,
                 "signupFractionPercent": _pct(signups, nuu),
+                "coveredStart": bucket.covered_start.isoformat(),
+                "coveredEnd": bucket.covered_end.isoformat(),
+                "partialBucket": bucket.censor is not None,
+                "censorSide": bucket.censor,
             }
         )
 
     csv_path = output_dir / "nuu_signup_fraction.csv"
+    json_path = output_dir / "nuu_signup_fraction.json"
     output_dir.mkdir(parents=True, exist_ok=True)
+    csv_fields = ["week", "signups", "nuu_count", "signupFractionPercent"]
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(
-            fh,
-            fieldnames=["week", "signups", "nuu_count", "signupFractionPercent"],
-        )
+        writer = csv.DictWriter(fh, fieldnames=csv_fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
+    payload = {
+        "metric": "nuuSignupFraction",
+        "grain": "Weekly",
+        "timelineStart": window_start.isoformat(),
+        "timelineEnd": window_end.isoformat(),
+        "buckets": [
+            {
+                "bucket": r["week"],
+                "signups": r["signups"],
+                "nuuCount": r["nuu_count"],
+                "signupFractionPercent": r["signupFractionPercent"],
+                "coveredStart": r.get("coveredStart"),
+                "coveredEnd": r.get("coveredEnd"),
+                "partialBucket": r.get("partialBucket"),
+                "censorSide": r.get("censorSide"),
+            }
+            for r in rows
+        ],
+        "totalSignups": sum(r["signups"] for r in rows),
+        "totalNuu": sum(r["nuu_count"] for r in rows),
+    }
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
     print(f"Weeks: {len(rows)}")
     print(f"CSV:   {csv_path}")
+    print(f"JSON:  {json_path}")
 
     if not args.skip_chart:
         import matplotlib

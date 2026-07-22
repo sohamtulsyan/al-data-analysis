@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from dotenv import load_dotenv
+
 from retention_pipeline.config import Config, load_config, load_analysis_config
 from retention_pipeline.metrics.retention import STRICT_HORIZONS, WINDOW_HORIZONS
 
@@ -16,6 +18,10 @@ from retention_api.services.paths import users_csv_default_path
 
 
 def client_credentials_configured() -> bool:
+    # Ensure .env is loaded even if the process was started without dotenv.
+    from retention_pipeline.config import PROJECT_ROOT
+
+    load_dotenv(PROJECT_ROOT / ".env")
     cid = os.environ.get("CLIENT_ID", "").strip()
     secret = os.environ.get("CLIENT_SECRET", "").strip()
     return bool(cid and secret)
@@ -78,7 +84,10 @@ def _parse_dt(value: str, tz: ZoneInfo) -> datetime:
 def resolve_analysis_params(
     params: Optional[Dict[str, Any]] = None,
 ) -> Tuple[datetime, datetime, str, str, Tuple[int, ...], Tuple[int, ...]]:
-    """Return start, end datetimes, grain, timezone, strict/window horizons."""
+    """Return start, end datetimes, grain, timezone, strict/window horizons.
+
+    Single analysis period for all jobs (analyze, pipeline, NUU, signup).
+    """
     raw = config_store.load_raw()
     p = params or {}
 
@@ -104,32 +113,6 @@ def resolve_analysis_params(
         end,
         grain,
         timezone,
-        tuple(int(x) for x in strict),
-        tuple(int(x) for x in window),
-    )
-
-
-def resolve_window_params(
-    params: Optional[Dict[str, Any]] = None,
-) -> Tuple[str, str, str, str, Tuple[int, ...], Tuple[int, ...]]:
-    raw = config_store.load_raw()
-    p = params or {}
-    window_start = p.get("windowStart") or raw.get("windowStart")
-    window_end = p.get("windowEnd") or raw.get("windowEnd")
-    timezone = p.get("timezone") or raw.get("timezone") or "UTC"
-    grain = p.get("grain") or raw.get("grain") or "Daily"
-    if not window_start or not window_end:
-        raise ValueError(
-            "windowStart and windowEnd are required "
-            "(set via PATCH /api/v1/config or job params)."
-        )
-    strict = p.get("strictHorizons") or raw.get("strictHorizons") or list(STRICT_HORIZONS)
-    window = p.get("windowHorizons") or raw.get("windowHorizons") or list(WINDOW_HORIZONS)
-    return (
-        window_start,
-        window_end,
-        timezone,
-        grain,
         tuple(int(x) for x in strict),
         tuple(int(x) for x in window),
     )

@@ -15,6 +15,15 @@
 
 7. **Engagement time is attributed only to a fully-contained play.** A play's `screenTimeSeconds` counts toward a bucket only when **both** its start and its last update fall inside that bucket — same day (Daily), same calendar week (Weekly), or same calendar month (Monthly); a play that straddles a boundary is excluded at that grain. This is **intentionally stricter than activity (assumption 5)**: engagement measures time spent completing a play within a single bucket, whereas activity only requires *some* event on the day. The two definitions are deliberately different. (Formal rule: Engagement — Play Eligibility.)
 
+8. **The daily cron cannot be fully correct — play state keeps changing after the day ends.** A play's `playState` and `updatedTimestamp` are mutated **in place on the same row** as the user returns to it, so the values recorded depend on *when* the fetch runs. Fetching day `n` immediately after it ends captures a play that is still in progress; if that user resumes and completes it on day `n+2`, the same row now holds a different `updatedTimestamp` and `playState` than what was persisted. Multi-day plays are therefore stored with a stale state. The pipeline currently assumes **a play started on day `n` also ends on day `n` for most users** — true for the majority, but it understates completions and last-update times for genuinely multi-day plays.
+
+9. **First and last buckets are censored, and their dips/peaks are artifacts, not behaviour.** Because buckets are calendar-aligned and retention horizons look forward, the edges of the timeline are computed on a *subset* of the data a full bucket would contain:
+   * **Left-censored (start).** If the timeline begins mid-week or mid-month, the first bucket spans fewer days, so it counts fewer users and plays.
+   * **Right-censored (end).** The last bucket is likewise short, and forward-looking retention additionally drops every user whose target day `D0 + N` falls past `timelineEnd`, shrinking that bucket's cohort.
+   * **Why this produces dips and peaks.** Fewer days means mechanically lower absolute counts — a **dip** that reflects less coverage, not less usage. Smaller cohorts mean a small denominator, so a handful of users swings the percentage sharply — **spiky peaks and dips that are variance, not signal**.
+
+   Edge values are flagged left/right censored and must not be read as a real decline or surge. (Formal rules: User Growth — Edge Censoring; Retention — Common Framework §6.)
+
 ---
 
 # **API Fetch Library**

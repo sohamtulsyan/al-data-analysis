@@ -35,7 +35,7 @@ Open http://localhost:8000/docs
 | `OUTPUT_DIR` | `output` | JSON, charts, jobs |
 | `RUNTIME_CONFIG_PATH` | `data/runtime_config.json` | Dashboard settings file |
 | `CORS_ORIGINS` | (empty) | Comma-separated origins for React |
-| `JOB_MAX_WORKERS` | `2` | Background job thread pool size |
+| `JOB_MAX_WORKERS` | `2` | Background pipeline-run thread pool size |
 | `USERS_CSV_PATH` | `users_*.csv` in project root | Default users export |
 | `RETENTION_API_GENERATE_CHARTS` | `0` | Set `1` to generate matplotlib PNGs on the server (not needed for Recharts dashboard). **Keep `0` on Python 3.14** — matplotlib PNG rendering can hit a `RecursionError` in `Path.__deepcopy__`. |
 
@@ -52,8 +52,7 @@ Returns effective dashboard settings plus `dataDir`, `outputDir`, and `clientCre
 Partial update. Body fields (all optional):
 
 - **Fetch:** `apiBaseUrl`, `seriesId`, `timezone`, `totalDataTimeStart`, `puzzleId`, `limit`, `offset`, `rateLimitRps`, `maxWorkers`
-- **Analysis timeline:** `timelineStart`, `timelineEnd`, `grain` (`Daily` | `Weekly` | `Monthly`)
-- **NUU window:** `windowStart`, `windowEnd` (ISO dates)
+- **Analysis timeline:** `timelineStart`, `timelineEnd`, `grain` (`Daily` | `Weekly` | `Monthly`) — used for all analysis jobs including NUU
 - **Retention horizons:** `strictHorizons` (e.g. `[1,3,7,30]`), `windowHorizons` (e.g. `[3,7,30]`)
 - **Signup:** `usersCsvPath` (or upload via `POST /api/v1/data/users-csv`)
 
@@ -68,35 +67,35 @@ curl -s -X PATCH http://localhost:8000/api/v1/config \
     "timelineStart": "2026-07-01T00:00:00",
     "timelineEnd": "2026-07-16T23:59:59",
     "grain": "Daily",
-    "windowStart": "2026-07-01",
-    "windowEnd": "2026-07-16",
     "strictHorizons": [1, 3, 7, 30],
     "windowHorizons": [3, 7, 30]
   }'
 ```
 
-## Jobs (async)
+## Pipeline Runs (async)
 
-Long work runs in the background. Poll until `status` is `succeeded` or `failed`.
+The pipeline runs in the background. Poll until `status` is `succeeded` or `failed`.
 
 ### `POST /api/v1/jobs`
 
 ```json
-{ "type": "<jobType>", "params": { } }
+{ "type": "pipeline", "params": { } }
 ```
 
-| `type` | Wraps | Notes |
-|--------|--------|-------|
-| `backfill` | `run_historical_backfill` | Needs credentials |
-| `daily` | `run_daily_cron` | Needs credentials |
-| `analyze` | `run_analysis` | Uses config + optional `params` overrides |
-| `pipeline` | backfill + analyze + charts | `params.skipFetch: true` to skip fetch |
-| `nuu_counts` | `scripts/compute_nuu.py` | Window from config or `params` |
-| `nuu_retention` | NUU retention script logic | Configurable horizons |
-| `signup_fraction` | `run_signup_fraction` | Weekly signups / active users |
-| `nuu_signup_fraction` | `plot_nuu_signup_fraction.py` | Run `nuu_counts` first |
+The only supported job type is `pipeline`.
 
-`params` can override any timeline/window/grain/timezone/horizon field for a single job.
+`pipeline` runs the full computation in one pass:
+
+- optional historical fetch (`params.skipFetch: true` to skip it)
+- core analysis (`analysis_results.json`)
+- NUU retention
+- OUU retention
+- signup fraction
+- NUU counts
+- NUU signup fraction
+- chart generation when `RETENTION_API_GENERATE_CHARTS=1`
+
+`params` can override timeline, grain, timezone, or horizon fields for a single pipeline run.
 
 Example — analyze existing CSVs without fetch:
 
@@ -125,6 +124,7 @@ Response (`202`):
 | `GET /api/v1/results/analysis` | `analysis_results.json` |
 | `GET /api/v1/results/signup-fraction` | `signup_fraction.json` |
 | `GET /api/v1/results/nuu-retention` | `nuu_retention.json` |
+| `GET /api/v1/results/nuu-signup-fraction` | `nuu_signup_fraction.json` (falls back to CSV) |
 | `GET /api/v1/artifacts/charts` | List chart filenames |
 | `GET /api/v1/artifacts/charts/{name}` | PNG or HTML file |
 
@@ -133,15 +133,22 @@ Response (`202`):
 1. Create a **Web Service** from this repo; use `render.yaml` or set:
    - **Build:** `pip install -r requirements.txt`
    - **Start:** `uvicorn retention_api.main:app --host 0.0.0.0 --port $PORT`
-2. Attach a **persistent disk** (e.g. 10GB) at `/var/data`; set `DATA_DIR`, `OUTPUT_DIR`, `RUNTIME_CONFIG_PATH` under that mount.
-3. Set `CLIENT_ID`, `CLIENT_SECRET`, and initial `SERIES_ID` / `TOTAL_DATA_TIME_START` in Render env (or PATCH config after deploy).
-4. Optional **Cron** job: POST `daily` to your service URL (see `render.yaml`).
+2. **Attach a persistent disk before using `/var/data` paths** (Dashboard → Disks → New Disk):
+   - Mount path: `/var/data`
+   - Size: ≥ 1 GB (Blueprint uses 10 GB)
+   - Then set (or keep from `render.yaml`):
+     - `DATA_DIR=/var/data/Daily Play Data`
+     - `OUTPUT_DIR=/var/data/output`
+     - `RUNTIME_CONFIG_PATH=/var/data/runtime_config.json`
+   - If the disk is **not** mounted, `PATCH /api/v1/config` fails with `Permission denied: '/var/data'`. Either add the disk, or **delete** those three env vars so the API writes under the repo (ephemeral — wiped on every deploy).
+3. Set `CLIENT_ID`, `CLIENT_SECRET` in Render env. Set Python to **3.11.9** (`runtime.txt` / `PYTHON_VERSION`).
+4. Optional **Cron** job: POST `pipeline` to your service URL (see `render.yaml`), or keep using a separate fetch-only cron outside this API.
 
 ## Error handling
 
-- Job failures: `GET /jobs/{id}` → `status: failed`, `error` message.
-- Grain not allowed: analyze/signup jobs surface PRD grain errors in `error`.
-- Missing timeline: set `timelineStart` / `timelineEnd` via PATCH before `analyze` or `pipeline`.
+- Pipeline failures: `GET /jobs/{id}` → `status: failed`, `error` message.
+- Grain not allowed: pipeline responses surface PRD grain errors in `error`.
+- Missing timeline: set `timelineStart` / `timelineEnd` via PATCH before `pipeline`.
 
 ## Relationship to CLI
 

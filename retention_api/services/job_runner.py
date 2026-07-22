@@ -112,7 +112,10 @@ def get_job(job_id: str) -> Optional[JobResponse]:
     record = _read_job(job_id)
     if record is None:
         return None
-    return _to_response(record)
+    try:
+        return _to_response(record)
+    except (KeyError, ValueError):
+        return None
 
 
 def list_jobs(limit: int = 20) -> List[JobResponse]:

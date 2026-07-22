@@ -315,8 +315,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     payload = {
-        "windowStart": window_start.isoformat(),
-        "windowEnd": window_end.isoformat(),
+        "timelineStart": window_start.isoformat(),
+        "timelineEnd": window_end.isoformat(),
         "grain": args.grain,
         "timezone": args.timezone,
         "cohort": "newUniqueUsers",

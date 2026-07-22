@@ -24,8 +24,6 @@ class RuntimeConfigPatch(BaseModel):
     timelineStart: Optional[str] = Field(None, alias="timelineStart")
     timelineEnd: Optional[str] = Field(None, alias="timelineEnd")
     grain: Optional[Grain] = None
-    windowStart: Optional[str] = Field(None, alias="windowStart")
-    windowEnd: Optional[str] = Field(None, alias="windowEnd")
     strictHorizons: Optional[List[int]] = Field(None, alias="strictHorizons")
     windowHorizons: Optional[List[int]] = Field(None, alias="windowHorizons")
     usersCsvPath: Optional[str] = Field(None, alias="usersCsvPath")
@@ -56,8 +54,6 @@ class RuntimeConfigResponse(BaseModel):
     timelineStart: Optional[str] = None
     timelineEnd: Optional[str] = None
     grain: Optional[Grain] = None
-    windowStart: Optional[str] = None
-    windowEnd: Optional[str] = None
     strictHorizons: List[int] = Field(default_factory=lambda: [1, 3, 7, 30])
     windowHorizons: List[int] = Field(default_factory=lambda: [3, 7, 30])
     usersCsvPath: Optional[str] = None
