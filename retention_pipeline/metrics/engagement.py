@@ -1,4 +1,7 @@
-"""Engagement by Timeline — median screenTimeSeconds (PRD Engagement §§1–8)."""
+"""Engagement by Timeline — median (and average) screenTimeSeconds (PRD Engagement §§1–8).
+
+Dashboard / charts use median only; average is included for CLI distribution summaries.
+"""
 
 from __future__ import annotations
 
@@ -40,6 +43,19 @@ def median_from_histogram(counts: Dict[int, int]) -> Optional[float]:
     if n % 2 == 1:
         return float(lo_val)
     return (lo_val + hi_val) / 2.0
+
+
+def mean_from_histogram(counts: Dict[int, int]) -> Optional[float]:
+    """Arithmetic mean of the screenTimeSeconds frequency histogram.
+
+    Zero qualifying plays → None (N/A). Not used for dashboard charts
+    (median remains the primary engagement metric); surfaced via CLI summaries.
+    """
+    n = sum(counts.values())
+    if n == 0:
+        return None
+    total = sum(value * freq for value, freq in counts.items())
+    return total / n
 
 
 def play_qualifies_for_bucket(play: PlayRow, bucket: Bucket, tz: ZoneInfo) -> bool:
@@ -93,12 +109,15 @@ def compute_engagement(
 
     results: List[Dict[str, Any]] = []
     for bucket in buckets:
-        med = median_from_histogram(dict(histograms[bucket.key]))
+        hist = dict(histograms[bucket.key])
+        med = median_from_histogram(hist)
+        avg = mean_from_histogram(hist)
         results.append(
             {
                 "bucket": bucket.key,
                 "grain": grain,
                 "medianScreenTimeSeconds": med if med is not None else "N/A",
+                "averageScreenTimeSeconds": avg if avg is not None else "N/A",
                 "qualifyingPlays": qualifying[bucket.key],
                 "excludedBoundarySpanningPlays": excluded[bucket.key],
                 "coveredStart": bucket.covered_start.isoformat(),

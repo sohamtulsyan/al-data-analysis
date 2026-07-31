@@ -16,6 +16,7 @@ class JobType(str, Enum):
     nuu_counts = "nuu_counts"
     nuu_retention = "nuu_retention"
     ouu_retention = "ouu_retention"
+    logged_in_retention = "logged_in_retention"
     signup_fraction = "signup_fraction"
     nuu_signup_fraction = "nuu_signup_fraction"
 

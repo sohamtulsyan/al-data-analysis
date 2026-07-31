@@ -1,4 +1,4 @@
-"""Serve analysis, NUU, and OUU JSON results."""
+"""Serve analysis, NUU, OUU, and logged-in JSON results."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ _RESULT_FILES = {
     "signup-fraction": "signup_fraction.json",
     "nuu-retention": "nuu_retention.json",
     "ouu-retention": "ouu_retention.json",
+    "logged-in-retention": "logged_in_retention.json",
     "nuu-signup-fraction": "nuu_signup_fraction.json",
 }
 

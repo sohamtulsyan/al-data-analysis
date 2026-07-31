@@ -85,6 +85,7 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
         for derived in (
             _run_nuu_retention(ddir, odir, params),
             _run_ouu_retention(ddir, odir, params),
+            _run_logged_in_retention(ddir, odir, params),
             _run_signup_fraction(ddir, odir, params),
             _run_nuu_counts(ddir, odir, params),
             _run_nuu_signup_fraction(odir, params),
@@ -105,6 +106,9 @@ def run_job_handler(job_type: JobType, params: Dict[str, Any]) -> Dict[str, Any]
 
     if job_type == JobType.ouu_retention:
         return _run_ouu_retention(ddir, odir, params)
+
+    if job_type == JobType.logged_in_retention:
+        return _run_logged_in_retention(ddir, odir, params)
 
     if job_type == JobType.nuu_signup_fraction:
         return _run_nuu_signup_fraction(odir, params)
@@ -442,6 +446,81 @@ def _run_ouu_retention(
     return _artifacts(
         {
             "ouuRetentionJson": str(json_path),
+            **{k: str(v) for k, v in chart_paths.items()},
+        },
+        charts=charts_list,
+    )
+
+
+def _run_logged_in_retention(
+    ddir: Path,
+    odir: Path,
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Mirror scripts/plot_logged_in_retention with configurable horizons."""
+    mod = load_script_module("plot_logged_in_retention.py")
+    start, end, grain, tz_name, strict_h, window_h = resolve_analysis_params(params)
+    timeline_start = start.date()
+    timeline_end = end.date()
+
+    available = discover_csv_days(ddir)
+    if not available:
+        _require_play_data_csvs(ddir)
+
+    timeframe_start = available[0]
+    timeframe_end = max(available[-1], timeline_end)
+    tz = ZoneInfo(tz_name)
+
+    _plays, matrix, _dq = prepare_analysis(ddir, timeframe_start, timeframe_end, tz)
+    try:
+        mod.validate_grain(timeline_start, timeline_end, grain)
+    except Exception as exc:
+        to_dict = getattr(exc, "to_dict", None)
+        if callable(to_dict):
+            raise ValueError(json.dumps(to_dict())) from exc
+        raise
+
+    payload = mod.build_logged_in_retention_payload(
+        matrix,
+        window_start=timeline_start,
+        window_end=timeline_end,
+        grain=grain,
+        timezone=tz_name,
+        strict_horizons=tuple(strict_h),
+        window_horizons=tuple(window_h),
+    )
+
+    charts_dir = odir / "charts"
+    json_path = odir / "logged_in_retention.json"
+    odir.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+    chart_paths: Dict[str, Path] = {}
+    charts_list: List[str] = []
+    if api_should_generate_charts():
+        metrics = payload["metrics"]
+        chart_paths = {
+            "strict": mod._plot_retention(
+                metrics["strictRetention"],
+                "Logged-in Strict Retention (%)",
+                charts_dir / "logged_in_strictRetention.png",
+            ),
+            "cumulative": mod._plot_retention(
+                metrics["cumulativeRetention"],
+                "Logged-in Cumulative Retention (%)",
+                charts_dir / "logged_in_cumulativeRetention.png",
+            ),
+            "consecutive": mod._plot_retention(
+                metrics["consecutiveRetention"],
+                "Logged-in Consecutive Retention (%)",
+                charts_dir / "logged_in_consecutiveRetention.png",
+            ),
+        }
+        charts_list = [str(v) for v in chart_paths.values()]
+
+    return _artifacts(
+        {
+            "loggedInRetentionJson": str(json_path),
             **{k: str(v) for k, v in chart_paths.items()},
         },
         charts=charts_list,

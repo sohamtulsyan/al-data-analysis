@@ -47,6 +47,10 @@ from retention_pipeline.cleaning.pipeline import (  # noqa: E402
 )
 from retention_pipeline.config import DAILY_PLAY_DATA_DIR, OUTPUT_DIR  # noqa: E402
 from retention_pipeline.metrics.errors import validate_grain  # noqa: E402
+from retention_pipeline.summary_stats import (  # noqa: E402
+    print_distribution_summaries,
+    summarize_retention_payload,
+)
 
 DEFAULT_WINDOW_START = date(2026, 7, 1)
 DEFAULT_WINDOW_END = date(2026, 7, 16)
@@ -326,6 +330,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             "consecutiveRetention": consecutive,
         },
     }
+
+    print_distribution_summaries(
+        summarize_retention_payload(payload, prefix="nuu."),
+        title="NUU distribution summaries",
+    )
 
     json_path = output_dir / "nuu_retention.json"
     output_dir.mkdir(parents=True, exist_ok=True)

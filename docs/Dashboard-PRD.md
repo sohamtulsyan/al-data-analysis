@@ -86,6 +86,8 @@ Each **page** composes **chart components** + **MetricExplainer** text; no monol
 | Analysis JSON | GET | `/api/v1/results/analysis` |
 | Signup JSON | GET | `/api/v1/results/signup-fraction` |
 | NUU retention JSON | GET | `/api/v1/results/nuu-retention` |
+| OUU retention JSON | GET | `/api/v1/results/ouu-retention` |
+| Logged-in retention JSON | GET | `/api/v1/results/logged-in-retention` |
 | Health | GET | `/health` |
 
 **Optional fallback:** `GET /api/v1/artifacts/charts/{name}` only for “Download PNG” actions—not for primary UI.
@@ -100,6 +102,8 @@ Each **page** composes **chart components** + **MetricExplainer** text; no monol
 | Full pipeline | `pipeline` | credentials unless `skipFetch: true` |
 | NUU counts | `nuu_counts` | `windowStart` / `windowEnd` |
 | NUU retention | `nuu_retention` | window + grain |
+| OUU retention | `ouu_retention` | window + grain |
+| Logged-in retention | `logged_in_retention` | window + grain (`imgl` uid prefix) |
 | Signup fraction (active users) | `signup_fraction` | users CSV path + timeline |
 | Signup vs NUU | `nuu_signup_fraction` | run `nuu_counts` first |
 
@@ -266,6 +270,8 @@ Same chart shapes as pipeline retention but:
 | `/pipeline` | Pipeline metrics | analysis (all non-retention + data quality) |
 | `/retention` | Retention deep dive | analysis retention metrics |
 | `/nuu` | NUU | nuu-retention + nuu counts job |
+| `/ouu` | OUU | ouu-retention |
+| `/logged-in` | Logged-in | logged-in-retention (`imgl` uids) |
 | `/signup` | Signup analyses | signup-fraction + nuu signup job |
 | `/settings` | Settings | GET/PATCH config + users upload |
 | `/runs` | Job history | `jobs?limit=20` + launch pad |

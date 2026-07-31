@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Old Unique Users (OUU) retention — mirror of NUU retention with per-bucket D0.
+"""Logged-in user retention — volume + Strict / Cumulative / Consecutive.
 
 Standalone script, also invoked by the API job handler.
 
 Definitions
 -----------
-* **OUU** — any user who is not an NUU: their global first-ever active day in the
-  Activity Matrix is strictly before their D0 in the current bucket.
+* **Logged-in user** — play ``uid`` starts with ``imgl`` (case-insensitive),
+  matching India Mini's logged-in detection.
 * **D0 (per bucket)** — first active day of the user *inside that bucket*
   (day for Daily, first active day in the ISO week for Weekly, first active day
   in the calendar month for Monthly).
-* An OUU is counted at most once per bucket (on that D0). Across buckets the same
-  uid may appear again with a new D0.
+* A logged-in user is counted at most once per bucket (on that D0). Across
+  buckets the same uid may appear again with a new D0.
 
-Predicates match NUU / PRD (no Rolling):
+Predicates match NUU / OUU / PRD (no Rolling):
   Strict:      active exactly on D0+N          N ∈ {1, 3, 7, 30}
   Cumulative:  active on any day in D1…DN     N ∈ {3, 7, 30}
   Consecutive: active on every day in D1…DN   N ∈ {3, 7, 30}
@@ -21,10 +21,10 @@ Predicates match NUU / PRD (no Rolling):
 Right-censoring: uid eligible for DN only if D0+N ≤ window_end.
 
 Writes:
-  output/ouu_retention.json
-  output/charts/ouu_strictRetention.png (optional)
-  output/charts/ouu_cumulativeRetention.png
-  output/charts/ouu_consecutiveRetention.png
+  output/logged_in_retention.json
+  output/charts/logged_in_strictRetention.png (optional)
+  output/charts/logged_in_cumulativeRetention.png
+  output/charts/logged_in_consecutiveRetention.png
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ from retention_pipeline.cleaning.pipeline import (  # noqa: E402
     prepare_analysis,
 )
 from retention_pipeline.config import DAILY_PLAY_DATA_DIR, OUTPUT_DIR  # noqa: E402
+from retention_pipeline.logged_in import is_logged_in_uid  # noqa: E402
 from retention_pipeline.metrics.errors import validate_grain  # noqa: E402
 from retention_pipeline.summary_stats import (  # noqa: E402
     print_distribution_summaries,
@@ -69,26 +70,19 @@ def _na_or_pct(retained: int, total: int) -> Any:
     return (retained / total) * 100.0
 
 
-def _ouu_d0_in_bucket(
+def _logged_in_d0_in_bucket(
     matrix: ActivityMatrix,
     bucket_days: Tuple[date, ...],
-    timeframe_days: List[date],
 ) -> Dict[str, date]:
-    """uid → D0 for OUUs whose first activity in this bucket exists.
-
-    OUU iff global first-ever active day is strictly before bucket D0
-    (i.e. the user is not an NUU on that D0).
-    """
+    """uid → D0 for logged-in users active in this bucket."""
     result: Dict[str, date] = {}
     for uid in matrix.active_uids_on_days(bucket_days):
+        if not is_logged_in_uid(uid):
+            continue
         d0 = matrix.first_active_day_in(uid, bucket_days)
         if d0 is None:
             continue
-        global_first = matrix.first_active_day_in(uid, timeframe_days)
-        if global_first is None:
-            continue
-        if global_first < d0:
-            result[uid] = d0
+        result[uid] = d0
     return result
 
 
@@ -114,7 +108,6 @@ def _compute_family(
     *,
     name: str,
     matrix: ActivityMatrix,
-    timeframe_days: List[date],
     window_start: date,
     window_end: date,
     grain: str,
@@ -125,7 +118,7 @@ def _compute_family(
     results: List[Dict[str, Any]] = []
 
     for bucket in buckets:
-        d0_map = _ouu_d0_in_bucket(matrix, bucket.days, timeframe_days)
+        d0_map = _logged_in_d0_in_bucket(matrix, bucket.days)
         total_active = len(d0_map)
         horizon_results: Dict[str, Any] = {}
 
@@ -146,7 +139,7 @@ def _compute_family(
                 "retainedCohort": retained,
                 "totalCohort": total,
                 "censored": total_active - total,
-                "totalOuuInBucket": total_active,
+                "totalLoggedInInBucket": total_active,
             }
 
         results.append(
@@ -166,7 +159,7 @@ def _compute_family(
         "grain": grain,
         "timelineStart": window_start.isoformat(),
         "timelineEnd": window_end.isoformat(),
-        "cohort": "oldUniqueUsers",
+        "cohort": "loggedInUsers",
         "buckets": results,
     }
 
@@ -230,7 +223,7 @@ def _plot_retention(
     return output_path
 
 
-def build_ouu_retention_payload(
+def build_logged_in_retention_payload(
     matrix: ActivityMatrix,
     *,
     window_start: date,
@@ -240,12 +233,10 @@ def build_ouu_retention_payload(
     strict_horizons: Tuple[int, ...] = STRICT_HORIZONS,
     window_horizons: Tuple[int, ...] = WINDOW_HORIZONS,
 ) -> Dict[str, Any]:
-    """Compute OUU retention families; used by CLI and API handler."""
-    timeframe_days = list(matrix.days)
+    """Compute logged-in retention families; used by CLI and API handler."""
     strict = _compute_family(
-        name="ouuStrictRetention",
+        name="loggedInStrictRetention",
         matrix=matrix,
-        timeframe_days=timeframe_days,
         window_start=window_start,
         window_end=window_end,
         grain=grain,
@@ -253,9 +244,8 @@ def build_ouu_retention_payload(
         predicate=_strict,
     )
     cumulative = _compute_family(
-        name="ouuCumulativeRetention",
+        name="loggedInCumulativeRetention",
         matrix=matrix,
-        timeframe_days=timeframe_days,
         window_start=window_start,
         window_end=window_end,
         grain=grain,
@@ -263,9 +253,8 @@ def build_ouu_retention_payload(
         predicate=_cumulative,
     )
     consecutive = _compute_family(
-        name="ouuConsecutiveRetention",
+        name="loggedInConsecutiveRetention",
         matrix=matrix,
-        timeframe_days=timeframe_days,
         window_start=window_start,
         window_end=window_end,
         grain=grain,
@@ -277,7 +266,8 @@ def build_ouu_retention_payload(
         "timelineEnd": window_end.isoformat(),
         "grain": grain,
         "timezone": timezone,
-        "cohort": "oldUniqueUsers",
+        "cohort": "loggedInUsers",
+        "uidPrefix": "imgl",
         "metrics": {
             "strictRetention": strict,
             "cumulativeRetention": cumulative,
@@ -288,7 +278,7 @@ def build_ouu_retention_payload(
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="OUU retention (strict / cumulative / consecutive)."
+        description="Logged-in user retention (strict / cumulative / consecutive)."
     )
     parser.add_argument("--data-dir", default=str(DAILY_PLAY_DATA_DIR))
     parser.add_argument("--output-dir", default=str(OUTPUT_DIR))
@@ -323,7 +313,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(
         f"Activity Matrix timeframe {timeframe_start} → {timeframe_end} "
-        f"(OUU retention window {window_start} → {window_end}, grain={args.grain})"
+        f"(logged-in retention window {window_start} → {window_end}, grain={args.grain})"
     )
     _plays, matrix, _dq = prepare_analysis(
         data_dir, timeframe_start, timeframe_end, tz
@@ -339,7 +329,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(str(exc), file=sys.stderr)
         return 2
 
-    payload = build_ouu_retention_payload(
+    payload = build_logged_in_retention_payload(
         matrix,
         window_start=window_start,
         window_end=window_end,
@@ -347,20 +337,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         timezone=args.timezone,
     )
 
-    # Rough volume summary from first horizon of first full-ish bucket
-    ouu_total = 0
+    logged_in_total = 0
     for b in payload["metrics"]["strictRetention"]["buckets"]:
         h = b["horizons"]
         key = next(iter(h), None)
         if key:
-            ouu_total += h[key].get("totalOuuInBucket", 0)
-    print(f"OUU cohort-days in window (sum of per-bucket counts): {ouu_total}")
+            logged_in_total += h[key].get("totalLoggedInInBucket", 0)
+    print(
+        f"Logged-in cohort-days in window (sum of per-bucket counts): {logged_in_total}"
+    )
     print_distribution_summaries(
-        summarize_retention_payload(payload, prefix="ouu."),
-        title="OUU distribution summaries",
+        summarize_retention_payload(payload, prefix="loggedIn."),
+        title="Logged-in distribution summaries",
     )
 
-    json_path = output_dir / "ouu_retention.json"
+    json_path = output_dir / "logged_in_retention.json"
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
@@ -369,18 +360,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         paths = {
             "strict": _plot_retention(
                 metrics["strictRetention"],
-                "OUU Strict Retention (%)",
-                charts_dir / "ouu_strictRetention.png",
+                "Logged-in Strict Retention (%)",
+                charts_dir / "logged_in_strictRetention.png",
             ),
             "cumulative": _plot_retention(
                 metrics["cumulativeRetention"],
-                "OUU Cumulative Retention (%)",
-                charts_dir / "ouu_cumulativeRetention.png",
+                "Logged-in Cumulative Retention (%)",
+                charts_dir / "logged_in_cumulativeRetention.png",
             ),
             "consecutive": _plot_retention(
                 metrics["consecutiveRetention"],
-                "OUU Consecutive Retention (%)",
-                charts_dir / "ouu_consecutiveRetention.png",
+                "Logged-in Consecutive Retention (%)",
+                charts_dir / "logged_in_consecutiveRetention.png",
             ),
         }
         for name, path in paths.items():

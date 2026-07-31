@@ -90,6 +90,7 @@ The only supported job type is `pipeline`.
 - core analysis (`analysis_results.json`)
 - NUU retention
 - OUU retention
+- logged-in retention (`uid` prefix `imgl`)
 - signup fraction
 - NUU counts
 - NUU signup fraction
@@ -124,6 +125,8 @@ Response (`202`):
 | `GET /api/v1/results/analysis` | `analysis_results.json` |
 | `GET /api/v1/results/signup-fraction` | `signup_fraction.json` |
 | `GET /api/v1/results/nuu-retention` | `nuu_retention.json` |
+| `GET /api/v1/results/ouu-retention` | `ouu_retention.json` |
+| `GET /api/v1/results/logged-in-retention` | `logged_in_retention.json` (uids starting with `imgl`) |
 | `GET /api/v1/results/nuu-signup-fraction` | `nuu_signup_fraction.json` (falls back to CSV) |
 | `GET /api/v1/artifacts/charts` | List chart filenames |
 | `GET /api/v1/artifacts/charts/{name}` | PNG or HTML file |

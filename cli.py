@@ -33,6 +33,11 @@ from retention_pipeline.config import (
 )
 from retention_pipeline.metrics.errors import GrainNotAllowedError
 from retention_pipeline.signup_analysis import run_signup_fraction
+from retention_pipeline.summary_stats import (
+    print_distribution_summaries,
+    summarize_analysis_payload,
+    summarize_signup_payload,
+)
 from retention_pipeline.visualize import load_and_render
 
 
@@ -107,6 +112,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         return 2
     print(f"Analysis complete. Distinct users: {result['distinctUsersInMatrix']}")
     print(f"Results: {Path(args.output_dir) / 'analysis_results.json'}")
+    print_distribution_summaries(summarize_analysis_payload(result))
     return 0
 
 
@@ -148,6 +154,7 @@ def cmd_signup_fraction(args: argparse.Namespace) -> int:
     )
     print(f"Results: {result['resultsPath']}")
     print(f"Chart:   {result['chartPath']}")
+    print_distribution_summaries(summarize_signup_payload(result))
     return 0
 
 
@@ -163,6 +170,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     print("Visualizations:")
     for name, path in paths.items():
         print(f"  {name}: {path}")
+    # Distribution summaries already printed by cmd_analyze
     return 0
 
 

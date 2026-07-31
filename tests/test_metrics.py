@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from retention_pipeline.bucketing import allowed_grains, build_buckets, timeline_length_days
 from retention_pipeline.cleaning.pipeline import prepare_analysis
 from retention_pipeline.config import CSV_COLUMNS
-from retention_pipeline.metrics.engagement import compute_engagement, median_from_histogram
+from retention_pipeline.metrics.engagement import compute_engagement, mean_from_histogram, median_from_histogram
 from retention_pipeline.metrics.errors import GrainNotAllowedError, validate_grain
 from retention_pipeline.metrics.play_state import compute_play_state
 from retention_pipeline.metrics.retention import (
@@ -117,6 +117,11 @@ class EngagementTests(unittest.TestCase):
         self.assertEqual(median_from_histogram({1: 1, 3: 1}), 2.0)
         self.assertIsNone(median_from_histogram({}))
 
+    def test_mean_histogram(self):
+        self.assertEqual(mean_from_histogram({10: 1, 30: 1}), 20.0)
+        self.assertEqual(mean_from_histogram({40: 2, 100: 1}), 60.0)
+        self.assertIsNone(mean_from_histogram({}))
+
     def test_fully_contained_eligibility(self):
         """Play Mon→Wed excluded from daily buckets; included in weekly (Engagement §4.1)."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -137,12 +142,14 @@ class EngagementTests(unittest.TestCase):
             # Only u2's fully-contained play qualifies on Monday
             self.assertEqual(mon_bucket["qualifyingPlays"], 1)
             self.assertEqual(mon_bucket["medianScreenTimeSeconds"], 40.0)
+            self.assertEqual(mon_bucket["averageScreenTimeSeconds"], 40.0)
 
             weekly = compute_engagement(plays, days[0], days[-1], "Weekly", TZ)
             # Both plays fully inside the ISO week
             week = weekly["buckets"][0]
             self.assertEqual(week["qualifyingPlays"], 2)
             self.assertEqual(week["medianScreenTimeSeconds"], 70.0)  # mean of 40 and 100
+            self.assertEqual(week["averageScreenTimeSeconds"], 70.0)
 
 
 class RetentionTests(unittest.TestCase):
@@ -278,6 +285,96 @@ class WeeklyPartialBucketTests(unittest.TestCase):
         self.assertEqual(len(buckets), 1)
         self.assertEqual(buckets[0].censor, "left")
         self.assertEqual(timeline_length_days(start, end), 5)
+
+
+class LoggedInRetentionTests(unittest.TestCase):
+    def test_is_logged_in_uid(self):
+        from retention_pipeline.logged_in import is_logged_in_uid
+
+        self.assertTrue(is_logged_in_uid("imglabc"))
+        self.assertTrue(is_logged_in_uid("IMGLXYZ"))
+        self.assertFalse(is_logged_in_uid("deadbeef"))
+        self.assertFalse(is_logged_in_uid(""))
+
+    def test_volume_and_retention_filter_to_imgl(self):
+        from retention_api.jobs.script_loader import load_script_module
+
+        mod = load_script_module("plot_logged_in_retention.py")
+        d0 = date(2026, 3, 2)
+        d1 = date(2026, 3, 3)
+        d2 = date(2026, 3, 4)
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            _write_day(
+                d,
+                d0,
+                [
+                    _row("imgl_a", "p1", d0, d0),
+                    _row("guest_hex", "p1", d0, d0),
+                ],
+            )
+            _write_day(
+                d,
+                d1,
+                [
+                    _row("imgl_a", "p1", d1, d1),
+                    _row("guest_hex", "p1", d1, d1),
+                ],
+            )
+            _write_day(d, d2, [_row("guest_hex", "p1", d2, d2)])
+            _plays, matrix, _ = prepare_analysis(d, d0, d2, TZ)
+            payload = mod.build_logged_in_retention_payload(
+                matrix,
+                window_start=d0,
+                window_end=d2,
+                grain="Daily",
+                timezone="UTC",
+            )
+            strict = payload["metrics"]["strictRetention"]["buckets"]
+            by = {b["bucket"]: b for b in strict}
+            # Only imgl_a counts as logged-in volume on d0
+            self.assertEqual(by["2026-03-02"]["horizons"]["D1"]["totalLoggedInInBucket"], 1)
+            self.assertEqual(by["2026-03-02"]["horizons"]["D1"]["retainedCohort"], 1)
+            self.assertEqual(by["2026-03-02"]["horizons"]["D1"]["totalCohort"], 1)
+            # No logged-in activity on d2 alone as a D0 cohort with guests only
+            self.assertEqual(by["2026-03-04"]["horizons"]["D1"]["totalLoggedInInBucket"], 0)
+
+
+class SummaryStatsTests(unittest.TestCase):
+    def test_mean_median_and_na_exclusion(self):
+        from retention_pipeline.summary_stats import mean_median, summarize_metric_block
+
+        self.assertEqual(mean_median([1.0, 3.0, 5.0]), (3.0, 3.0, 3))
+        self.assertEqual(mean_median([1.0, 5.0]), (3.0, 3.0, 2))
+        self.assertEqual(mean_median([]), (None, None, 0))
+
+        metric = {
+            "buckets": [
+                {
+                    "bucket": "a",
+                    "horizons": {
+                        "D1": {"retentionPercent": 10.0, "totalActiveInBucket": 100},
+                        "D3": {"retentionPercent": "N/A", "totalActiveInBucket": 100},
+                    },
+                },
+                {
+                    "bucket": "b",
+                    "horizons": {
+                        "D1": {"retentionPercent": 30.0, "totalActiveInBucket": 200},
+                        "D3": {"retentionPercent": 20.0, "totalActiveInBucket": 200},
+                    },
+                },
+            ]
+        }
+        lines = summarize_metric_block("strictRetention", metric)
+        joined = "\n".join(lines)
+        self.assertIn("strictRetention.D1.retentionPercent", joined)
+        self.assertIn("n=2", joined)
+        self.assertIn("mean=    20.00%", joined)
+        self.assertIn("strictRetention.totalActiveInBucket", joined)
+        # D3 excludes the N/A bucket → n=1
+        d3 = next(line for line in lines if "D3.retentionPercent" in line)
+        self.assertIn("n=1", d3)
 
 
 if __name__ == "__main__":
